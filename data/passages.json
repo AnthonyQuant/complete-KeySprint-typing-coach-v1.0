@@ -1,0 +1,17 @@
+{
+  "general": [
+    "The quick brown fox jumps over the lazy dog. Continuous practice improves speed, accuracy, and confidence over time.",
+    "Software engineering requires a combination of logical thinking, attention to detail, and persistent problem solving.",
+    "Developing high typing speed with proper technique reduces cognitive load while programming and writing documentation."
+  ],
+  "punctuation": [
+    "Hello, world! Can you type: 100% accurately, even with 'quotes', (parentheses), & [brackets]?",
+    "Variables, functions, and classes: Python's core components (e.g., def, class, return, import) use symbols daily!",
+    "Check values at index [0], verify range(1, 10), and evaluate expressions like: (x + y) * z >= 42."
+  ],
+  "developer": [
+    "def calculate_wpm(typed_chars: int, time_sec: float) -> float:\n    minutes = time_sec / 60.0\n    return round((typed_chars / 5.0) / minutes, 2) if minutes > 0 else 0.0",
+    "class TypingEngine:\n    def __init__(self, target: str):\n        self.target = target\n        self.errors = {}\n        self.is_active = True",
+    "for key, value in result.items():\n    if value.get('count', 0) > 5:\n        logger.info(f'High frequency error detected for key: {key}')"
+  ]
+}
