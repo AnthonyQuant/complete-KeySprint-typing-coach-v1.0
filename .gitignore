@@ -11,6 +11,9 @@ __pycache__/
 
 # Database / Local History
 data/history.db
+data/*.db
+*.db
+
 
 # IDE / System Settings
 .idea/
