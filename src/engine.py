@@ -1,6 +1,4 @@
-"""Core typing mechanics, state management, and real-time metric calculations."""
-
-"""Core typing mechanics, state management, and real-time metric calculations."""
+"""Core typing engine logic, timer precision, state management, and dual metrics for KeySprint."""
 
 import time
 from enum import Enum
@@ -8,13 +6,13 @@ from typing import Dict, List, Tuple
 
 
 class EngineState(Enum):
-    IDLE = "IDLE"  # Waiting for first keystroke
-    RUNNING = "RUNNING"  # Active typing test
-    FINISHED = "FINISHED"  # Time expired or passage completed
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    FINISHED = "FINISHED"
 
 
 class TypingEngine:
-    def __init__(self, target_text: str, duration_seconds: int = 60):
+    def __init__(self, target_text: str = "", duration_seconds: int = 60):
         self.target_text: str = target_text
         self.duration_seconds: int = duration_seconds
 
@@ -23,115 +21,142 @@ class TypingEngine:
 
         self.start_time: float = 0.0
         self.end_time: float = 0.0
-
-        # Keystroke analytics
         self.total_keystrokes: int = 0
-        self.uncorrected_errors: int = 0
-        self.character_errors: Dict[str, Dict[str, int]] = {}  # expected -> {typed: count}
+
+        # Nested dictionary mapping: expected_char -> {typed_char: error_count}
+        self.character_errors: Dict[str, Dict[str, int]] = {}
+
+        # Dictionary mapping: expected_char -> total_occurrences_count
+        self.character_occurrences: Dict[str, int] = {}
 
     def start_test(self) -> None:
-        """Starts the timer on first keystroke."""
+        """Starts the typing test timer using high-precision monotonic clock."""
         if self.state == EngineState.IDLE:
             self.state = EngineState.RUNNING
-            self.start_time = time.time()
+            self.start_time = time.monotonic()
 
-    def process_key(self, char_typed: str) -> None:
-        """Processes a single character input."""
+    def finish_test(self) -> None:
+        """Stops the typing test timer."""
+        if self.state == EngineState.RUNNING:
+            self.state = EngineState.FINISHED
+            self.end_time = time.monotonic()
+
+    def process_key(self, char: str) -> None:
+        """Processes character input keypresses."""
         if self.state == EngineState.FINISHED:
             return
 
         if self.state == EngineState.IDLE:
             self.start_test()
 
-        # Prevent typing beyond text length
-        if len(self.typed_text) >= len(self.target_text):
-            return
+        if len(self.typed_text) < len(self.target_text):
+            expected = self.target_text[len(self.typed_text)]
 
-        expected_char = self.target_text[len(self.typed_text)]
-        self.typed_text += char_typed
-        self.total_keystrokes += 1
+            # Record total occurrences encountered for this expected character
+            self.character_occurrences[expected] = self.character_occurrences.get(expected, 0) + 1
 
-        # Record miskey frequency for Weakness Analyzer
-        if char_typed != expected_char:
-            if expected_char not in self.character_errors:
-                self.character_errors[expected_char] = {}
-            self.character_errors[expected_char][char_typed] = (
-                    self.character_errors[expected_char].get(char_typed, 0) + 1
-            )
+            # Record miskeys
+            if char != expected:
+                if expected not in self.character_errors:
+                    self.character_errors[expected] = {}
+                self.character_errors[expected][char] = self.character_errors[expected].get(char, 0) + 1
 
-        # Complete test if full text typed
-        if len(self.typed_text) == len(self.target_text):
-            self.finish_test()
+            self.typed_text += char
+            self.total_keystrokes += 1
+
+            # Automatically complete test when full text matches target
+            if self.typed_text == self.target_text:
+                self.finish_test()
 
     def process_backspace(self) -> None:
-        """Removes the last typed character."""
-        if self.state == EngineState.RUNNING and len(self.typed_text) > 0:
-            self.typed_text = self.typed_text[:-1]
-
-    def finish_test(self) -> None:
-        """Ends the active test."""
-        if self.state == EngineState.RUNNING:
-            self.state = EngineState.FINISHED
-            self.end_time = time.time()
+        """Removes the last typed character without incrementing total keystrokes."""
+        if self.state == EngineState.FINISHED or len(self.typed_text) == 0:
+            return
+        self.typed_text = self.typed_text[:-1]
 
     def get_elapsed_seconds(self) -> float:
-        """Returns active time elapsed."""
+        """Observational getter for elapsed test time in seconds, capped at duration if finished."""
         if self.state == EngineState.IDLE:
             return 0.0
-        elif self.state == EngineState.RUNNING:
-            elapsed = time.time() - self.start_time
-            if elapsed >= self.duration_seconds:
-                self.finish_test()
-                return float(self.duration_seconds)
-            return elapsed
-        else:
-            return min(self.end_time - self.start_time, float(self.duration_seconds))
+        if self.state == EngineState.RUNNING:
+            return time.monotonic() - self.start_time
 
-    def calculate_wpm(self) -> float:
+        raw_elapsed = self.end_time - self.start_time
+        if not self.is_fully_completed and raw_elapsed > self.duration_seconds:
+            return float(self.duration_seconds)
+        return raw_elapsed
+
+    @property
+    def is_fully_completed(self) -> bool:
+        """Returns True if the target text is fully matched."""
+        return self.typed_text == self.target_text and len(self.target_text) > 0
+
+    def get_character_status(self) -> List[Tuple[str, str]]:
+        """Returns list of (char, status_tag) tuples for UI highlighting."""
+        res = []
+        for i, char in enumerate(self.target_text):
+            if i < len(self.typed_text):
+                if self.typed_text[i] == char:
+                    res.append((char, "correct"))
+                else:
+                    res.append((char, "incorrect"))
+            elif i == len(self.typed_text):
+                res.append((char, "cursor"))
+            else:
+                res.append((char, "untyped"))
+        return res
+
+    # --- Accuracy Metrics ---
+
+    def calculate_final_accuracy(self) -> float:
+        """Percentage of characters in the current typed buffer matching target_text."""
+        if len(self.typed_text) == 0:
+            return 100.0
+        correct_chars = sum(
+            1 for i, c in enumerate(self.typed_text)
+            if i < len(self.target_text) and c == self.target_text[i]
+        )
+        acc = (correct_chars / len(self.typed_text)) * 100.0
+        return round(min(100.0, max(0.0, acc)), 2)
+
+    def calculate_keystroke_accuracy(self) -> float:
         """
-        Calculates Gross Words Per Minute.
-        Standard Formula: (Characters Typed / 5) / Elapsed Minutes
+        Percentage of total character-entry attempts that were correct,
+        accounting for corrected mistakes and backspaced keystrokes.
         """
+        if self.total_keystrokes == 0:
+            return 100.0
+        total_errors = sum(sum(typed_map.values()) for typed_map in self.character_errors.values())
+        correct_attempts = max(0, self.total_keystrokes - total_errors)
+        acc = (correct_attempts / self.total_keystrokes) * 100.0
+        return round(min(100.0, max(0.0, acc)), 2)
+
+    def calculate_accuracy(self) -> float:
+        """Backward-compatible alias for final-text accuracy."""
+        return self.calculate_final_accuracy()
+
+    # --- Speed Metrics ---
+
+    def calculate_net_wpm(self) -> float:
+        """Net WPM based strictly on correctly typed characters remaining in the final text buffer."""
         elapsed_min = self.get_elapsed_seconds() / 60.0
         if elapsed_min <= 0:
             return 0.0
-
-        # Standard WPM definition: 1 word = 5 characters
-        gross_wpm = (len(self.typed_text) / 5.0) / elapsed_min
-        return round(gross_wpm, 2)
-
-    def calculate_accuracy(self) -> float:
-        """
-        Calculates Accuracy percentage matching target text.
-        Formula: (Correct Characters / Total Typed Characters) * 100
-        """
-        if not self.typed_text:
-            return 100.0
-
         correct_chars = sum(
-            1 for i, char in enumerate(self.typed_text)
-            if i < len(self.target_text) and char == self.target_text[i]
+            1 for i, c in enumerate(self.typed_text)
+            if i < len(self.target_text) and c == self.target_text[i]
         )
-        accuracy = (correct_chars / len(self.typed_text)) * 100.0
-        return round(accuracy, 2)
+        net_words = correct_chars / 5.0
+        return round(net_words / elapsed_min, 1)
 
-    def get_character_status(self) -> List[Tuple[str, str]]:
-        """
-        Returns list of (char, status) for UI rendering:
-        Status options: 'correct', 'incorrect', 'untyped', 'cursor'
-        """
-        status_list = []
-        typed_len = len(self.typed_text)
+    def calculate_gross_wpm(self) -> float:
+        """Gross (Raw) WPM based on total character-entry keystrokes over time."""
+        elapsed_min = self.get_elapsed_seconds() / 60.0
+        if elapsed_min <= 0:
+            return 0.0
+        raw_words = self.total_keystrokes / 5.0
+        return round(raw_words / elapsed_min, 1)
 
-        for idx, char in enumerate(self.target_text):
-            if idx < typed_len:
-                if self.typed_text[idx] == char:
-                    status_list.append((char, "correct"))
-                else:
-                    status_list.append((char, "incorrect"))
-            elif idx == typed_len and self.state != EngineState.FINISHED:
-                status_list.append((char, "cursor"))
-            else:
-                status_list.append((char, "untyped"))
-
-        return status_list
+    def calculate_wpm(self) -> float:
+        """Backward-compatible alias for Net WPM."""
+        return self.calculate_net_wpm()

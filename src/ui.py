@@ -153,8 +153,8 @@ class TypingCoachApp:
         self.text_display.tag_config("incorrect", foreground="#f38ba8", background="#45475a")
         self.text_display.tag_config("cursor", background="#89b4fa", foreground="#11111b")
 
-        # Weak Keys Quick Bar
-        self.weak_bar = tk.Label(
+        # Weak Keys Quick Bar (Updated variable name)
+        self.weak_bar_label = tk.Label(
             self.root,
             text="Weak Keys: None logged yet (complete a test to analyze errors)",
             fg="#a6adc8",
@@ -162,7 +162,7 @@ class TypingCoachApp:
             font=("Segoe UI", 9),
             pady=6
         )
-        self.weak_bar.pack(fill="x", side="bottom")
+        self.weak_bar_label.pack(fill="x", side="bottom")
 
         # Event Bindings
         self.root.bind("<Key>", self._on_key_press)
@@ -198,12 +198,21 @@ class TypingCoachApp:
         self._update_weak_bar()
 
     def _update_weak_bar(self):
+        """Fetches top weak characters by error rate percentage and updates the UI weakness indicator bar."""
+        if not hasattr(self, "weak_bar_label"):
+            return
+
         weak_keys = self.db.get_top_weak_keys(limit=5)
-        if weak_keys:
-            formatted = ", ".join([f"'{k}' ({c} errs)" for k, c in weak_keys])
-            self.weak_bar.config(text=f"Top Weak Keys: {formatted}  |  Click 'Weakness Drill' to practice these!")
-        else:
-            self.weak_bar.config(text="Weak Keys: None logged yet. Complete a test to track miskeys.")
+        if not weak_keys:
+            self.weak_bar_label.config(text="Weakness Analyzer: No weak keys detected yet!")
+            return
+
+        formatted = []
+        for char, rate in weak_keys:
+            display_char = repr(char) if char in (" ", "\n", "\t") else f"'{char}'"
+            formatted.append(f"{display_char} ({rate:.1f}%)")
+
+        self.weak_bar_label.config(text=f"Weakness Analyzer (Highest Error Rates): {', '.join(formatted)}")
 
     def _render_text(self):
         """Renders passage character-by-character with visual feedback status tags."""
@@ -220,8 +229,25 @@ class TypingCoachApp:
         if not self.engine or self.engine.state == EngineState.FINISHED:
             return
 
+        # Handle Backspace
         if event.keysym == "BackSpace":
             self.engine.process_backspace()
+
+        # Handle Enter / Return (Newlines for Developer Mode)
+        elif event.keysym in ("Return", "KP_Enter"):
+            self.engine.process_key("\n")
+            if self.engine.state == EngineState.RUNNING and not self.timer_job:
+                self._update_timer_loop()
+
+        # Handle Tab (Inserts 4 spaces for Python indentation)
+        elif event.keysym == "Tab":
+            for _ in range(4):
+                self.engine.process_key(" ")
+            if self.engine.state == EngineState.RUNNING and not self.timer_job:
+                self._update_timer_loop()
+            return "break"
+
+        # Handle standard printable characters
         elif len(event.char) == 1 and ord(event.char) >= 32:
             self.engine.process_key(event.char)
 
@@ -231,6 +257,10 @@ class TypingCoachApp:
         self._render_text()
         self._update_metrics()
 
+        # Immediately invoke completion handler if keypress completed the passage
+        if self.engine.state == EngineState.FINISHED:
+            self._handle_test_completion()
+
     def _update_metrics(self):
         if not self.engine:
             return
@@ -238,40 +268,48 @@ class TypingCoachApp:
         self.accuracy_label.config(text=f"{self.engine.calculate_accuracy():.1f}%")
 
     def _update_timer_loop(self):
-        if not self.engine or self.engine.state != EngineState.RUNNING:
+        if not self.engine:
             return
 
         elapsed = self.engine.get_elapsed_seconds()
         remaining = max(0, self.engine.duration_seconds - int(elapsed))
         self.timer_label.config(text=f"{remaining}s")
 
-        if remaining <= 0 or self.engine.state == EngineState.FINISHED:
+        if self.engine.state == EngineState.FINISHED or remaining <= 0:
             self._handle_test_completion()
             return
 
         self.timer_job = self.root.after(100, self._update_timer_loop)
 
     def _handle_test_completion(self):
-        """Ends active test, logs session metrics, and evaluates achievement badges."""
+        """Ends active test, logs session metrics once, and evaluates achievement badges."""
+        if self.session_logged:
+            return
+        self.session_logged = True
+
+        if self.timer_job:
+            self.root.after_cancel(self.timer_job)
+            self.timer_job = None
+
         self.engine.finish_test()
         self.timer_label.config(text="0s")
         self._render_text()
 
-        if not self.session_logged:
-            self.session_logged = True
-            self.db.log_session(self.engine, self.selected_category.get())
-            self._update_weak_bar()
+        # Record session results in SQLite
+        self.db.log_session(self.engine, self.selected_category.get())
+        self._update_weak_bar()
 
-            stats = self.db.get_historical_stats()
-            new_unlocks = self.ach_mgr.evaluate_session(
-                self.engine,
-                category=self.selected_category.get(),
-                total_tests_count=stats["total_tests"]
-            )
+        # Evaluate achievement badge conditions
+        stats = self.db.get_historical_stats()
+        new_unlocks = self.ach_mgr.evaluate_session(
+            self.engine,
+            category=self.selected_category.get(),
+            total_tests_count=stats["total_tests"]
+        )
 
-            if new_unlocks:
-                names = ", ".join([f"{a['icon']} {a['title']}" for a in new_unlocks])
-                messagebox.showinfo("Achievement Unlocked!", f"Congratulations! You unlocked:\n\n{names}")
+        if new_unlocks:
+            names = ", ".join([f"{a['icon']} {a['title']}" for a in new_unlocks])
+            messagebox.showinfo("Achievement Unlocked!", f"Congratulations! You unlocked:\n\n{names}")
 
     def start_weakness_drill(self):
         top_weak = self.db.get_top_weak_keys(limit=5)
